@@ -6,7 +6,7 @@ import cookieParser from "cookie-parser";
 import authRouter from "./routers/auth.routes.js";
 import productRouter from "./routers/product.routes.js";
 import supplierRouter from "./routers/supplier.routes.js";
-import stockPurchaseRouter from "./routers/stockPurchase.router.js";
+import purchaseRouter from "./routers/purchase.routes.js";
 import routeRouter from "./routers/route.routes.js";
 import customerRouter from "./routers/customer.routes.js";
 import saleRouter from "./routers/sale.routes.js";
@@ -26,7 +26,7 @@ app.get("/", (req, res) => {
 app.use("/api", authRouter);
 app.use("/api", productRouter);
 app.use("/api", supplierRouter);
-app.use("/api", stockPurchaseRouter);
+app.use("/api", purchaseRouter);
 app.use("/api", routeRouter);
 app.use("/api", customerRouter);
 app.use("/api", saleRouter);

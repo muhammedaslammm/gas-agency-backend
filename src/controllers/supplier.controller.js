@@ -89,6 +89,26 @@ export const getSuppliers = async (req, res, next) => {
   }
 };
 
+export const getSuppliersforPurchase = async (req, res, next) => {
+  try {
+    const suppliers = await Supplier.find({
+      organization: req.organizationId,
+      deletedAt: { $exists: false },
+    })
+      .select("name _id")
+      .sort({ name: 1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: suppliers.length,
+      suppliers,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 export const updateSupplier = async (req, res, next) => {
   try {
     const { supplierId } = req.params;

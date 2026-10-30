@@ -1,11 +1,17 @@
 import mongoose from "mongoose";
-import StockPurchase from "../models/stockPurchase.model.js";
+import Purchase from "../models/purchase.model.js";
 import Supplier from "../models/supplier.model.js";
 import Product from "../models/product.model.js";
 
-export const createStockPurchase = async (req, res, next) => {
+export const createPurchase = async (req, res, next) => {
   try {
-    const { supplierId, items, purchaseDate } = req.body ?? {};
+    const {
+      invoiceNumber,
+      supplierId,
+      items,
+      purchaseDate,
+      emr = false,
+    } = req.body ?? {};
 
     const fail = (message, statusCode = 400) => {
       const error = new Error(message);
@@ -17,24 +23,32 @@ export const createStockPurchase = async (req, res, next) => {
       fail("Invalid request body.");
     }
 
-    const allowedFields = ["supplierId", "items", "purchaseDate"];
+    const allowedFields = [
+      "invoiceNumber",
+      "supplierId",
+      "items",
+      "purchaseDate",
+      "emr",
+    ];
 
     if (Object.keys(req.body).some((key) => !allowedFields.includes(key))) {
       fail("Request contains unsupported fields.");
+    }
+
+    if (
+      typeof invoiceNumber !== "string" ||
+      !invoiceNumber.trim() ||
+      invoiceNumber.trim().length > 100
+    ) {
+      fail("A valid invoice number is required (maximum 100 characters).");
     }
 
     if (!mongoose.isValidObjectId(supplierId)) {
       fail("A valid supplier is required.");
     }
 
-    const supplier = await Supplier.findOne({
-      _id: supplierId,
-      organization: req.organizationId,
-      deletedAt: { $exists: false },
-    });
-
-    if (!supplier) {
-      fail("Supplier not found.", 404);
+    if (typeof emr !== "boolean") {
+      fail("Invalid EMR value");
     }
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -50,27 +64,32 @@ export const createStockPurchase = async (req, res, next) => {
       }
     }
 
+    const supplier = await Supplier.findOne({
+      _id: supplierId,
+      organization: req.organizationId,
+      deletedAt: { $exists: false },
+    }).lean();
+
+    if (!supplier) {
+      fail("Supplier not found.", 404);
+    }
+
     const parsedItems = [];
     const productIds = new Set();
-    let totalCost = 0;
+    let totalBillPrice = 0;
 
     for (const item of items) {
       if (!item || typeof item !== "object" || Array.isArray(item)) {
-        fail("Each purchase item must be an object.");
+        fail("Invalid purchase item");
       }
 
-      const allowedItemFields = [
-        "productId",
-        "quantity",
-        "unitCost",
-        "emptyQuantityReturned",
-      ];
+      const allowedItemFields = ["productId", "quantity", "totalGstPrice"];
 
       if (Object.keys(item).some((key) => !allowedItemFields.includes(key))) {
         fail("A purchase item contains unsupported fields.");
       }
 
-      const { productId, quantity, unitCost, emptyQuantityReturned = 0 } = item;
+      const { productId, quantity, totalGstPrice } = item;
 
       if (!mongoose.isValidObjectId(productId)) {
         fail("Each item must have a valid product.");
@@ -91,41 +110,26 @@ export const createStockPurchase = async (req, res, next) => {
       }
 
       if (
-        typeof unitCost !== "number" ||
-        !Number.isFinite(unitCost) ||
-        unitCost < 0 ||
-        Math.round(unitCost * 100) !== unitCost * 100
-      ) {
-        fail("Unit cost must be a valid amount with up to two decimal places.");
-      }
-
-      if (
-        !Number.isSafeInteger(emptyQuantityReturned) ||
-        emptyQuantityReturned < 0
+        typeof totalGstPrice !== "number" ||
+        !Number.isFinite(totalGstPrice) ||
+        totalGstPrice < 0 ||
+        Math.round(totalGstPrice * 100) !== totalGstPrice * 100
       ) {
         fail(
-          "Returned empty-cylinder quantity must be a non-negative whole number.",
+          "Product GST price must be a non-negative amount with up to two decimal places.",
         );
       }
 
-      const lineTotal = Math.round(quantity * unitCost * 100) / 100;
+      totalBillPrice = Math.round((totalBillPrice + totalGstPrice) * 100) / 100;
 
-      if (!Number.isFinite(lineTotal)) {
-        fail("Purchase item total is too large.");
-      }
-
-      totalCost = Math.round((totalCost + lineTotal) * 100) / 100;
-
-      if (!Number.isFinite(totalCost)) {
+      if (!Number.isFinite(totalBillPrice)) {
         fail("Purchase total is too large.");
       }
 
       parsedItems.push({
         productId: normalizedProductId,
         quantity,
-        unitCost,
-        emptyQuantityReturned,
-        lineTotal,
+        totalGstPrice,
       });
     }
 
@@ -147,46 +151,48 @@ export const createStockPurchase = async (req, res, next) => {
             fail("A selected product was not found or is inactive.", 404);
           }
 
-          if (
-            product.stockType !== "cylinder" &&
-            item.emptyQuantityReturned > 0
-          ) {
-            fail(
-              `Empty cylinders can only be returned against cylinder products: ${product.name}.`,
-            );
-          }
+          let stockUpdate;
 
-          const stockUpdate =
-            product.stockType === "cylinder"
-              ? {
-                  $inc: {
-                    filledQuantity: item.quantity,
-                    emptyQuantity: -item.emptyQuantityReturned,
-                  },
-                }
-              : {
-                  $inc: {
-                    quantity: item.quantity,
-                  },
-                };
+          if (product.stockType === "cylinder") {
+            if (!Number.isSafeInteger(product.filledQuantity + item.quantity)) {
+              fail(
+                `Filled stock would exceed the safe limit for ${product.name}.`,
+              );
+            }
 
-          const stockFilter = {
-            _id: product._id,
-            organization: req.organizationId,
-            deletedAt: { $exists: false },
-          };
+            if (
+              !emr &&
+              !Number.isSafeInteger(product.emptyQuantity - item.quantity)
+            ) {
+              fail(
+                `Empty stock would exceed the safe limit for ${product.name}.`,
+              );
+            }
 
-          if (
-            product.stockType === "cylinder" &&
-            item.emptyQuantityReturned > 0
-          ) {
-            stockFilter.emptyQuantity = {
-              $gte: item.emptyQuantityReturned,
+            stockUpdate = {
+              $inc: {
+                filledQuantity: item.quantity,
+                ...(emr ? {} : { emptyQuantity: -item.quantity }),
+              },
+            };
+          } else {
+            if (!Number.isSafeInteger(product.quantity + item.quantity)) {
+              fail(`Stock would exceed the safe limit for ${product.name}.`);
+            }
+
+            stockUpdate = {
+              $inc: {
+                quantity: item.quantity,
+              },
             };
           }
 
           const updatedProduct = await Product.findOneAndUpdate(
-            stockFilter,
+            {
+              _id: product._id,
+              organization: req.organizationId,
+              deletedAt: { $exists: false },
+            },
             stockUpdate,
             {
               new: true,
@@ -197,7 +203,7 @@ export const createStockPurchase = async (req, res, next) => {
 
           if (!updatedProduct) {
             fail(
-              `Stock changed or there are not enough empty cylinders for ${product.name}. Please check the stock and try again.`,
+              `Stock could not be updated for ${product.name}. Please try again.`,
               409,
             );
           }
@@ -207,20 +213,20 @@ export const createStockPurchase = async (req, res, next) => {
             productName: product.name,
             stockType: product.stockType,
             quantity: item.quantity,
-            unitCost: item.unitCost,
-            lineTotal: item.lineTotal,
-            emptyQuantityReturned: item.emptyQuantityReturned,
+            totalGstPrice: item.totalGstPrice,
           });
         }
 
-        const [purchase] = await StockPurchase.create(
+        const [purchase] = await Purchase.create(
           [
             {
               organization: req.organizationId,
+              invoiceNumber: invoiceNumber.trim(),
               supplier: supplier._id,
               supplierName: supplier.name,
               items: purchaseItems,
-              totalCost,
+              totalBillPrice,
+              emr,
               purchaseDate:
                 purchaseDate === undefined
                   ? new Date()
@@ -239,20 +245,21 @@ export const createStockPurchase = async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      message: "Stock purchase recorded successfully.",
+      message: "Purchase recorded successfully.",
       purchase: createdPurchase,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
-export const getStockPurchases = async (req, res, next) => {
+export const getPurchases = async (req, res, next) => {
   try {
-    const purchases = await StockPurchase.find({
+    const purchases = await Purchase.find({
       organization: req.organizationId,
     })
-      .sort({ purchaseDate: -1, createdAt: -1 })
+      .select("-organization -supplier -updatedAt -__v")
+      .sort({ createdAt: -1 })
       .lean();
 
     return res.status(200).json({
@@ -261,6 +268,6 @@ export const getStockPurchases = async (req, res, next) => {
       purchases,
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };

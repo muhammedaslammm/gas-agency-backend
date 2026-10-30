@@ -137,13 +137,13 @@ export const getProducts = async (req, res, next) => {
   }
 };
 
-export const getProductsforCustomers = async (req, res, next) => {
+export const getSelectableProducts = async (req, res, next) => {
   try {
     const products = await Product.find({
       organization: req.organizationId,
       deletedAt: { $exists: false },
     })
-      .select("_id name stockType quantity")
+      .select("_id name stockType")
       .sort({ name: 1 })
       .lean();
 

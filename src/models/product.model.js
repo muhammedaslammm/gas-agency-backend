@@ -43,7 +43,10 @@ const productSchema = new mongoose.Schema(
 
     emptyQuantity: {
       type: Number,
-      min: 0,
+      validate: {
+        validator: Number.isSafeInteger,
+        message: "Empty quantity must be a whole number.",
+      },
     },
 
     deletedAt: {

@@ -16,39 +16,44 @@ const purchaseItemSchema = new mongoose.Schema(
       type: String,
       enum: ["cylinder", "other"],
       required: true,
+      default: "cylinder",
     },
     quantity: {
       type: Number,
       required: true,
       min: 1,
+      validate: {
+        validator: Number.isSafeInteger,
+        message: "Purchase quantity must be a whole number.",
+      },
     },
-    unitCost: {
+    totalGstPrice: {
       type: Number,
       required: true,
       min: 0,
-    },
-    lineTotal: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-    emptyQuantityReturned: {
-      type: Number,
-      required: true,
-      default: 0,
-      min: 0,
+      validate: {
+        validator: (value) =>
+          Number.isFinite(value) && Math.round(value * 100) === value * 100,
+        message: "GST price must have up to two decimal places.",
+      },
     },
   },
   { _id: false },
 );
 
-const stockPurchaseSchema = new mongoose.Schema(
+const purchaseSchema = new mongoose.Schema(
   {
     organization: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Organization",
       required: true,
       immutable: true,
+    },
+    invoiceNumber: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 100,
     },
     supplier: {
       type: mongoose.Schema.Types.ObjectId,
@@ -68,10 +73,14 @@ const stockPurchaseSchema = new mongoose.Schema(
         message: "A purchase must contain at least one item.",
       },
     },
-    totalCost: {
+    totalBillPrice: {
       type: Number,
       required: true,
       min: 0,
+    },
+    emr: {
+      type: Boolean,
+      default: false,
     },
     purchaseDate: {
       type: Date,
@@ -87,6 +96,7 @@ const stockPurchaseSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-const StockPurchase = mongoose.model("StockPurchase", stockPurchaseSchema);
+// Keep the existing MongoDB collection so existing purchase records remain accessible.
+const Purchase = mongoose.model("Purchase", purchaseSchema);
 
-export default StockPurchase;
+export default Purchase;
